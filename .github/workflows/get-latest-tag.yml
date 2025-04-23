@@ -1,37 +1,36 @@
-name: Test Latest-Created-Tag
+name: Get Latest Tag on Push
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
 
 jobs:
-  get-tag:
+  latest-tag:
     runs-on: ubuntu-latest
+
     steps:
-      # 👇 fetch entire history + all tags
-      - name: Checkout code (with all tags)
+      # 1. Checkout full history & all tags so we can see everything
+      - name: Checkout code (full)
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0      # pull full history
-          # fetch-tags is true by default in checkout v4
-          
-      - name: List and pick latest-created tag
+          fetch-depth: 0
+
+      # 2. Use GraphQL-backed action to fetch the latest tag by commit date
+      - name: Get latest tag
+        id: get-latest
+        uses: actions-ecosystem/action-get-latest-tag@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      # 3. Expose it (and a build timestamp) to subsequent steps
+      - name: Export env vars
         run: |
-          echo "📌 All tags (sorted by creation date):"
-          git for-each-ref --sort=-creatordate \
-            --format '%(refname:strip=2)' refs/tags
-
-          LATEST_TAG=$(
-            git for-each-ref --sort=-creatordate \
-              --format '%(refname:strip=2)' refs/tags \
-            | head -n1
-          )
-
-          echo "✅ Computed LATEST_TAG=$LATEST_TAG"
-          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
+          echo "LATEST_TAG=${{ steps.get-latest.outputs.tag }}" >> $GITHUB_ENV
           echo "BUILD_TIMESTAMP=$(date '+%Y%m%d%H%M%S')" >> $GITHUB_ENV
 
-      - name: Debug env vars
+      # 4. (Optional) debug
+      - name: Debug
         run: |
-          echo "🚀 LATEST_TAG from env: $LATEST_TAG"
-          echo "🚀 BUILD_TIMESTAMP from env: $BUILD_TIMESTAMP"
+          echo "🔖 LATEST_TAG=$LATEST_TAG"
+          echo "⏱ BUILD_TIMESTAMP=$BUILD_TIMESTAMP"
