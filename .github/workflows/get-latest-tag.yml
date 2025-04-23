@@ -1,7 +1,6 @@
 name: Get Latest Tag on Push
 
 on:
-  on:
   push:
     
     tags:
