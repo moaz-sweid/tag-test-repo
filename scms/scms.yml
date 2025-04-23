@@ -25,6 +25,7 @@ jobs:
       with:
         repository: "UgaritTech/SCMS"
         token: ${{ secrets.PAT_TOKEN }}
+        fetch-depth: 0
          # If this run was manual, use the input; if it was a tag push, default to that branch’s commit
         ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.deploy-branch || github.ref }}
         path: scms
@@ -53,10 +54,9 @@ jobs:
 
     - name: Get latest tag
       id: get-latest-tag
-      uses: actions-ecosystem/action-get-latest-tag@v1
+      uses: "WyriHaximus/github-action-get-previous-tag@v1"
       with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-
+          workingDirectory: 'scms'
     - name: Export LATEST_TAG and BUILD_TIMESTAMP
       run: |
         echo "LATEST_TAG=${{ steps.get-latest-tag.outputs.tag }}" >> $GITHUB_ENV
