@@ -1,0 +1,31 @@
+name: Test Latest-Created-Tag
+
+on:
+  push:
+    # fire on any push so you can re-run by pushing a dummy change
+    branches: [ main ]
+  
+jobs:
+  get-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get latest created Git tag
+        run: |
+          echo "📌 All tags (sorted by creation date):"
+          git for-each-ref --sort=-creatordate --format '%(refname:strip=2)' refs/tags
+          
+          LATEST_TAG=$(git for-each-ref --sort=-creatordate \
+            --format '%(refname:strip=2)' refs/tags | head -n 1)
+
+          echo "✅ LATEST_TAG=$LATEST_TAG"
+          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
+
+          echo "BUILD_TIMESTAMP=$(date '+%Y%m%d%H%M%S')" >> $GITHUB_ENV
+
+      - name: Debug env vars
+        run: |
+          echo "🚀 Final LATEST_TAG in env: $LATEST_TAG"
+          echo "🚀 BUILD_TIMESTAMP in env: $BUILD_TIMESTAMP"
