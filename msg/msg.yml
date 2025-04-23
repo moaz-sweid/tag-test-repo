@@ -1,0 +1,157 @@
+name: Build Msg Service-Prod
+on:
+  workflow_dispatch:
+    inputs:
+      safee-tracking:
+        required: true
+        default: "master"
+        description: Choose Safee Client branch to build
+      FleetMessagingServer:
+        required: true
+        default: "master"
+        description: Choose Messaging Service branch to build
+      tag:
+        required: true
+        default: "prod"
+        description: Choose tag for msg service docker image
+      hz_single:
+        type: boolean
+        default: true
+        description: no HZ cluster (HZ-S)
+      hz_async:
+        type: boolean
+        default: false
+        description: Use HZ with Async (HZ-ASY)
+      hz_sync:
+        type: boolean
+        default: false
+        description: Use HZ with sync (HZ-SY)
+
+env:
+  DOCKER_REGISTRY: "prod-registry.safee.com"
+  DOCKER_IMAGE_NAME: "msg-service"
+  DOCKER_IMAGE_HZ_TAG: "HZ-S"
+  MSTEAMS_WEBHOOK: "https://nurdernek.webhook.office.com/webhookb2/34cbc660-6cf1-43fe-b032-6ed7abd0f581@758b3098-b6f6-42ba-8309-6fb195e54bd5/IncomingWebhook/2cb79ddcab184f83b7f3a6abceba501d/b970ad1a-f46c-44ef-bda4-24c42eba2347/V2uME8lonYsh4EsLxF4mehcUOeIfCoDIXOy3AZPszg36w1"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          repository: "UgaritTech/safee-tracking"
+          token: ${{ secrets.PAT_TOKEN }}
+          ref: ${{github.event.inputs.safee-tracking}}
+          path: safee-tracking
+
+      - uses: actions/checkout@v3
+        with:
+          repository: "UgaritTech/FleetMessagingServer"
+          token: ${{ secrets.PAT_TOKEN }}
+          ref: ${{github.event.inputs.FleetMessagingServer}}
+          path: FleetMessagingServer
+
+      - uses: actions/setup-java@v3
+        with:
+          distribution: "zulu"
+          java-version: "17"
+
+      - name: Set up Maven
+        uses: stCarolas/setup-maven@v4.5
+        with:
+          maven-version: 3.6.3
+
+      - name: Update Hazelcast client - single
+        if: ${{ inputs.hz_single }}
+        run: sed -i 's/127.0.0.1:5701/prod-safee-cache:5701/g' "safee-tracking/SafeeTracking-jpa/src/main/resources/META-INF/persistence.xml"
+
+      - name: Update Hazelcast client
+        run: sed -i 's/127.0.0.1:5701/prod-safee-cache-01:5701,prod-safee-cache-02:5701/g' "safee-tracking/SafeeTracking-jpa/src/main/resources/META-INF/persistence.xml"
+
+      - name: Set HZ-ASYNC
+        if: ${{ inputs.hz_async }}
+        run: |       
+          rm safee-tracking/SafeeTrackingClient/src/main/java/com/safee/tracking/hazelcast/HazelcastConstants.java
+          cp safee-tracking/SafeeTrackingClient/src/main/resources/hazelcast-constants-template/AsyncHazelcastConstants.java.template safee-tracking/SafeeTrackingClient/src/main/java/com/safee/tracking/hazelcast/HazelcastConstants.java
+          echo "DOCKER_IMAGE_HZ_TAG=HZ-ASY" >> $GITHUB_ENV
+          echo $DOCKER_IMAGE_HZ_TAG
+
+      - name: Set HZ-SYNC
+        if: ${{ inputs.hz_sync }}
+        run: |       
+          rm safee-tracking/SafeeTrackingClient/src/main/java/com/safee/tracking/hazelcast/HazelcastConstants.java
+          cp safee-tracking/SafeeTrackingClient/src/main/resources/hazelcast-constants-template/SyncHazelcastConstants.java.template safee-tracking/SafeeTrackingClient/src/main/java/com/safee/tracking/hazelcast/HazelcastConstants.java
+          echo "DOCKER_IMAGE_HZ_TAG=HZ-SY" >> $GITHUB_ENV
+          echo $DOCKER_IMAGE_HZ_TAG
+
+      - name: Set HZ-Single
+        if: ${{ inputs.hz_single }}
+        run: |       
+          rm safee-tracking/SafeeTrackingClient/src/main/java/com/safee/tracking/hazelcast/HazelcastConstants.java
+          cp safee-tracking/SafeeTrackingClient/src/main/resources/hazelcast-constants-template/SingleHazelcastConstants.java.template safee-tracking/SafeeTrackingClient/src/main/java/com/safee/tracking/hazelcast/HazelcastConstants.java
+          echo "DOCKER_IMAGE_HZ_TAG=HZ-S" >> $GITHUB_ENV
+          echo $DOCKER_IMAGE_HZ_TAG
+
+      - name: Build Safee Artifacts
+        run: |
+          mvn install:install-file -Dfile="safee-tracking/Artifacts/muraqib-connector-1.0.jar" -Dclassifier=jakarta -DgroupId="com.safee" -DartifactId="muraqib-connector" -Dversion="1.0" -Dpackaging="jar"
+          mvn install:install-file -Dfile="safee-tracking/Artifacts/jm-connector-6.6-jakarta.jar" -Dclassifier=jakarta -DgroupId="tech.ugarit.jm" -DartifactId="jm-connector" -Dversion="6.6" -Dpackaging="jar"
+          mvn install:install-file -Dfile="safee-tracking/Artifacts/wasl-integration-model-1.5.18-jakarta.jar" -Dclassifier=jakarta -DgroupId="com.safee" -DartifactId="wasl-integration-model" -Dversion="1.5.18" -Dpackaging="jar"
+          mvn install:install-file -Dfile="safee-tracking/Artifacts/safee-logging-1.0.jar" -DgroupId="safee"  -DartifactId="safee-logging" -Dversion="1.0" -Dpackaging="jar"
+          mvn -f safee-tracking/SafeeTrackingClient/pom.xml clean install
+
+      - name: Build Msg Service
+        run: mvn -f FleetMessagingServer/pom.xml clean install
+
+      - name: Move jar to docker folder
+        run: mv FleetMessagingServer/target/FleetMessagingServer-2.0-SNAPSHOT-jar-with-dependencies.jar FleetMessagingServer/docker/msg-service.jar
+
+      - name: Get build timestamp
+        run: echo "BUILD_TIMESTAMP=$(date '+%Y%m%d%H%M%S')" >> $GITHUB_ENV
+
+      - name: Login to Safee Private Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.DOCKER_REGISTRY }}
+          username: sre
+          password: ${{ secrets.REGISTRY_PASS }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Safee App Docker image
+        id: docker_build
+        uses: docker/build-push-action@v5
+        with:
+          context: FleetMessagingServer/docker
+          push: true
+          tags: ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.DOCKER_IMAGE_HZ_TAG}}-${{github.event.inputs.tag}},${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.DOCKER_IMAGE_HZ_TAG}}-${{github.event.inputs.tag}}-${{ env.BUILD_TIMESTAMP }}
+
+      - uses: neonidian/teams-notify-build-status@v3
+        with:
+          webhookUrl: ${{ env.MSTEAMS_WEBHOOK }}
+          title: ${{ env.DOCKER_IMAGE_NAME }}
+          titleBackgroundColor: ${{ steps.unitTest.outcome }}
+          status: ${{ job.status }}
+          message: |
+            ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.DOCKER_IMAGE_HZ_TAG}}-${{github.event.inputs.tag}}-${{ env.BUILD_TIMESTAMP }}@${{ steps.docker_build.outputs.digest }}
+
+            ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.DOCKER_IMAGE_HZ_TAG}}-${{github.event.inputs.tag}}@${{ steps.docker_build.outputs.digest }}
+
+            ${{ env.DOCKER_IMAGE_NAME }} built successfully.
+
+            Safee Tracking Branch: ${{github.event.inputs.safee-tracking}}.
+
+            FleetMessagingServer Branch: ${{github.event.inputs.FleetMessagingServer}}.
+
+            Docker image ID: ${{ steps.docker_build.outputs.imageid }}.
+
+            Docker image digest: ${{ steps.docker_build.outputs.digest }}.
+
+            Docker image tag: ${{ env.DOCKER_IMAGE_HZ_TAG}}-${{github.event.inputs.tag}}.
+
+            Timestamp: ${{ env.BUILD_TIMESTAMP }}.
+        env:
+          SHOULD_DISPLAY_ACTOR_LABEL: true
+          SHOULD_DISPLAY_VIEW_RUN_BUTTON: true
+          SHOULD_DISPLAY_VIEW_COMMIT_BUTTON: true
