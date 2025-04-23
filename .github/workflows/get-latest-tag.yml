@@ -13,11 +13,13 @@ jobs:
       # 1. Checkout full history & all tags so we can see everything
       - name: Checkout code
         uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
 
       # 2. Use GraphQL-backed action to fetch the latest tag by commit date
       - name: Get latest tag
         id: get-latest
-        uses: actions-ecosystem/action-get-latest-tag@v1
+        uses: "WyriHaximus/github-action-get-previous-tag@v1"
       
       # 3. Expose it (and a build timestamp) to subsequent steps
       - name: Export env vars
