@@ -2,7 +2,6 @@ name: Get Latest Tag on Push
 
 on:
   push:
-    
     tags:
       - '*'
 
@@ -12,10 +11,8 @@ jobs:
 
     steps:
       # 1. Checkout full history & all tags so we can see everything
-      - name: Checkout code (full)
+      - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       # 2. Use GraphQL-backed action to fetch the latest tag by commit date
       - name: Get latest tag
