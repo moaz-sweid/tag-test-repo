@@ -1,4 +1,5 @@
 name: Build RtMD-Prod
+
 on:
   workflow_dispatch:
     inputs:
@@ -6,6 +7,10 @@ on:
         required: true
         default: "master"
         description: Choose RtMD branch to build
+
+  push:
+    tags:
+      - "*"
 
 env:
   DOCKER_REGISTRY: "prod-registry.safee.com"
@@ -16,15 +21,20 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-    - uses: actions/checkout@v3
+    - name: Checkout code
+      uses: actions/checkout@v3
       with:
         repository: "UgaritTech/RtMD"
         token: ${{ secrets.PAT_TOKEN }}
-        ref: ${{github.event.inputs.deploy-branch}}
+        fetch-depth: 0
+        # If manual run, use input branch; if tag push, check out that tag
+        ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.deploy-branch || github.ref }}
         path: rtmd
 
-    - uses: actions/setup-java@v3
+    - name: Set up Java 17 (Corretto)
+      uses: actions/setup-java@v3
       with:
         distribution: 'corretto'
         java-version: '17'
@@ -32,21 +42,35 @@ jobs:
     - name: Set up Maven
       uses: stCarolas/setup-maven@v4.5
       with:
-        maven-version: 3.9.3
+        maven-version: '3.9.3'
 
     - name: Install project artifacts
       run: |
-        mvn install:install-file -Dfile="rtmd/jars/muraqib-connector-1.0.jar" -Dclassifier=jakarta -DgroupId="com.safee" -DartifactId="muraqib-connector" -Dversion="1.0" -Dpackaging="jar"
-        mvn install:install-file -Dfile="rtmd/jars/jm-connector-6.6-jakarta.jar" -Dclassifier=jakarta -DgroupId="tech.ugarit.jm" -DartifactId="jm-connector" -Dversion="6.6" -Dpackaging="jar"
-        mvn install:install-file -Dfile="rtmd/jars/wasl-integration-model-1.5.17-jakarta.jar" -Dclassifier=jakarta -DgroupId="com.safee" -DartifactId="wasl-integration-model" -Dversion="1.5.17" -Dpackaging="jar"
-        mvn install:install-file -Dfile="rtmd/jars/SafeeTrackingClient-2.1.jar" -DgroupId="com.safee.tracking" -DartifactId="SafeeTrackingClient" -Dversion="2.1" -Dpackaging="jar"
+        mvn install:install-file -Dfile="rtmd/jars/muraqib-connector-1.0.jar" \
+          -Dclassifier=jakarta -DgroupId="com.safee" -DartifactId="muraqib-connector" \
+          -Dversion="1.0" -Dpackaging="jar"
+        mvn install:install-file -Dfile="rtmd/jars/jm-connector-6.6-jakarta.jar" \
+          -Dclassifier=jakarta -DgroupId="tech.ugarit.jm" -DartifactId="jm-connector" \
+          -Dversion="6.6" -Dpackaging="jar"
+        mvn install:install-file -Dfile="rtmd/jars/wasl-integration-model-1.5.17-jakarta.jar" \
+          -Dclassifier=jakarta -DgroupId="com.safee" -DartifactId="wasl-integration-model" \
+          -Dversion="1.5.17" -Dpackaging="jar"
+        mvn install:install-file -Dfile="rtmd/jars/SafeeTrackingClient-2.1.jar" \
+          -DgroupId="com.safee.tracking" -DartifactId="SafeeTrackingClient" \
+          -Dversion="2.1" -Dpackaging="jar"
 
     - name: Build RtMD
       run: mvn -f rtmd/pom.xml clean install -DskipTests
 
-    - name: Get latest releast tag and build timestamp
+    - name: Get latest tag
+      id: get-latest-tag
+      uses: WyriHaximus/github-action-get-previous-tag@v1
+      with:
+        workingDirectory: 'rtmd'
+
+    - name: Export LATEST_TAG and BUILD_TIMESTAMP
       run: |
-        echo "LATEST_RELEASE_TAG=$(curl --silent -u sre-ugarit:${{ secrets.PAT_TOKEN }} https://api.github.com/repos/UgaritTech/RtMD/tags | jq -r '.[0].name')" >> $GITHUB_ENV
+        echo "LATEST_TAG=${{ steps.get-latest-tag.outputs.tag }}" >> $GITHUB_ENV
         echo "BUILD_TIMESTAMP=$(date '+%Y%m%d%H%M%S')" >> $GITHUB_ENV
 
     - name: Login to Safee Private Registry
@@ -63,32 +87,33 @@ jobs:
       id: docker_build
       uses: docker/build-push-action@v5
       with:
-        context: ${{ env.DOCKER_IMAGE_NAME }}
+        context: rtmd
         push: true
-        tags: ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.DOCKER_IMAGE_TAG_TEXT }},${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.LATEST_RELEASE_TAG }},${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.LATEST_RELEASE_TAG }}-${{ env.BUILD_TIMESTAMP }}
+        tags: |
+          ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.DOCKER_IMAGE_TAG_TEXT }}
+          ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.LATEST_TAG }}
+          ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.LATEST_TAG }}-${{ env.BUILD_TIMESTAMP }}
         cache-from: type=registry,ref=${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:buildcache
         cache-to: type=registry,ref=${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:buildcache,mode=max
 
-    - uses: neonidian/teams-notify-build-status@v3
+    - name: Send Teams notification
+      uses: neonidian/teams-notify-build-status@v3
       with:
         webhookUrl: ${{ env.MSTEAMS_WEBHOOK }}
         title: ${{ env.DOCKER_IMAGE_NAME }} - Prod
         status: ${{ job.status }}
         message: |
-          ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.LATEST_RELEASE_TAG }}-${{ env.BUILD_TIMESTAMP }}@${{ steps.docker_build.outputs.digest }}
-            
-          ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.LATEST_RELEASE_TAG }}@${{ steps.docker_build.outputs.digest }}
+          ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.LATEST_TAG }}-${{ env.BUILD_TIMESTAMP }}@${{ steps.docker_build.outputs.digest }}
+
+          ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.LATEST_TAG }}@${{ steps.docker_build.outputs.digest }}
 
           ${{ env.DOCKER_IMAGE_NAME }} built successfully.
-          
-          Branch: ${{github.event.inputs.deploy-branch}}.
+
+          Branch/Tag: ${{ github.ref_name }}.
 
           Docker image ID: ${{ steps.docker_build.outputs.imageid }}.
-
           Docker image digest: ${{ steps.docker_build.outputs.digest }}.
-
-          Docker image latest release tag: ${{ env.LATEST_RELEASE_TAG }}.
-
+          Docker image latest tag: ${{ env.LATEST_TAG }}.
           Timestamp: ${{ env.BUILD_TIMESTAMP }}.
       env:
         SHOULD_DISPLAY_ACTOR_LABEL: true
