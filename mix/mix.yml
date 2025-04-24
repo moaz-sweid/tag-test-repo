@@ -73,12 +73,12 @@ jobs:
           context: mix
           push: true
           tags: |
-            ${{ env.DOCKER_REGISTRY }}/$ {{ env.DOCKER_IMAGE_NAME }}:${{ env.DOCKER_IMAGE_TAG_TEXT }}
-            ${{ env.DOCKER_REGISTRY }}/$ {{ env.DOCKER_IMAGE_NAME }}:${{ env.LATEST_TAG }}
-            ${{ env.DOCKER_REGISTRY }}/$ {{ env.DOCKER_IMAGE_NAME }}:${{ env.DOCKER_IMAGE_TAG_TEXT }}-${{ env.BUILD_TIMESTAMP }}
-            ${{ env.DOCKER_REGISTRY }}/$ {{ env.DOCKER_IMAGE_NAME }}:${{ env.LATEST_TAG }}-${{ env.BUILD_TIMESTAMP }}
-          cache-from: type=registry,ref=${{ env.DOCKER_REGISTRY }}/$ {{ env.DOCKER_IMAGE_NAME }}:buildcache
-          cache-to: type=registry,ref=${{ env.DOCKER_REGISTRY }}/$ {{ env.DOCKER_IMAGE_NAME }}:buildcache,mode=max
+            ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.DOCKER_IMAGE_TAG_TEXT }}
+            ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.LATEST_TAG }}
+            ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.DOCKER_IMAGE_TAG_TEXT }}-${{ env.BUILD_TIMESTAMP }}
+            ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.LATEST_TAG }}-${{ env.BUILD_TIMESTAMP }}
+          cache-from: type=registry,ref=${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:buildcache
+          cache-to: type=registry,ref=${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:buildcache,mode=max
 
       - name: Notify via Teams
         uses: neonidian/teams-notify-build-status@v3
@@ -87,8 +87,8 @@ jobs:
           title: ${{ env.DOCKER_IMAGE_NAME }} - Prod
           status: ${{ job.status }}
           message: |
-            ${{ env.DOCKER_REGISTRY }}/$ {{ env.DOCKER_IMAGE_NAME }}:${{ env.DOCKER_IMAGE_TAG_TEXT }}-${{ env.BUILD_TIMESTAMP }}@${{ steps.docker_build.outputs.digest }}
-            ${{ env.DOCKER_REGISTRY }}/$ {{ env.DOCKER_IMAGE_NAME }}:${{ env.LATEST_TAG }}-${{ env.BUILD_TIMESTAMP }}@${{ steps.docker_build.outputs.digest }}
+            ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.DOCKER_IMAGE_TAG_TEXT }}-${{ env.BUILD_TIMESTAMP }}@${{ steps.docker_build.outputs.digest }}
+            ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.LATEST_TAG }}-${{ env.BUILD_TIMESTAMP }}@${{ steps.docker_build.outputs.digest }}
 
             ${{ env.DOCKER_IMAGE_NAME }} built successfully.
             Ref: ${{ github.ref_name }}
