@@ -1,4 +1,5 @@
 name: Build Car-sharing-Prod
+
 on:
   workflow_dispatch:
     inputs:
@@ -6,6 +7,10 @@ on:
         required: true
         default: "main"
         description: Choose Car-sharing branch to build
+
+  push:
+    tags:
+      - "*"
 
 env:
   DOCKER_REGISTRY: "prod-registry.safee.com"
@@ -16,12 +21,15 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v3
         with:
           repository: "UgaritTech/Car-sharing"
           token: ${{ secrets.PAT_TOKEN }}
-          ref: ${{github.event.inputs.deploy-branch}}
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.deploy-branch || github.ref }}
           path: car-sharing
 
       - uses: actions/setup-java@v3
@@ -32,13 +40,20 @@ jobs:
       - name: Set up Maven
         uses: stCarolas/setup-maven@v4.5
         with:
-          maven-version: 3.6.3
+          maven-version: "3.6.3"
 
       - name: Build Car-sharing
         run: mvn -f car-sharing/pom.xml clean install -DskipTests
-      - name: Get latest releast tag
+
+      - name: Get latest tag
+        id: get-latest-tag
+        uses: WyriHaximus/github-action-get-previous-tag@v1
+        with:
+          workingDirectory: 'car-sharing'
+
+      - name: Export LATEST_TAG and BUILD_TIMESTAMP
         run: |
-          echo "LATEST_RELEASE_TAG=$(curl --silent -u sre-ugarit:${{ secrets.PAT_TOKEN }} https://api.github.com/repos/UgaritTech/Car-sharing/tags | jq -r '.[0].name')" >> $GITHUB_ENV
+          echo "LATEST_TAG=${{ steps.get-latest-tag.outputs.tag }}" >> $GITHUB_ENV
           echo "BUILD_TIMESTAMP=$(date '+%Y%m%d%H%M%S')" >> $GITHUB_ENV
 
       - name: Login to Safee Private Registry
@@ -57,30 +72,32 @@ jobs:
         with:
           context: car-sharing
           push: true
-          tags: ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:latest,${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.LATEST_RELEASE_TAG }},${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.DOCKER_IMAGE_TAG_TEXT }}-${{ env.BUILD_TIMESTAMP }},${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.LATEST_RELEASE_TAG }}-${{ env.BUILD_TIMESTAMP }}
+          tags: |
+            ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.DOCKER_IMAGE_TAG_TEXT }}
+            ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.LATEST_TAG }}
+            ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.DOCKER_IMAGE_TAG_TEXT }}-${{ env.BUILD_TIMESTAMP }}
+            ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.LATEST_TAG }}-${{ env.BUILD_TIMESTAMP }}
           cache-from: type=registry,ref=${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:buildcache
           cache-to: type=registry,ref=${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:buildcache,mode=max
 
-      - uses: neonidian/teams-notify-build-status@v3
+      - name: Send Teams notification
+        uses: neonidian/teams-notify-build-status@v3
         with:
           webhookUrl: ${{ env.MSTEAMS_WEBHOOK }}
           title: ${{ env.DOCKER_IMAGE_NAME }} - Prod
           status: ${{ job.status }}
           message: |
             ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.DOCKER_IMAGE_TAG_TEXT }}-${{ env.BUILD_TIMESTAMP }}@${{ steps.docker_build.outputs.digest }}
-            
-            ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.LATEST_RELEASE_TAG }}-${{ env.BUILD_TIMESTAMP }}@${{ steps.docker_build.outputs.digest }}
+
+            ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.LATEST_TAG }}-${{ env.BUILD_TIMESTAMP }}@${{ steps.docker_build.outputs.digest }}
 
             ${{ env.DOCKER_IMAGE_NAME }} built successfully.
 
-            Branch: ${{github.event.inputs.deploy-branch}}.
+            Branch/Tag: ${{ github.ref_name }}.
 
             Docker image ID: ${{ steps.docker_build.outputs.imageid }}.
-
             Docker image digest: ${{ steps.docker_build.outputs.digest }}.
-
-            Docker image tag: ${{ env.LATEST_RELEASE_TAG }}.
-
+            Docker image latest tag: ${{ env.LATEST_TAG }}.
             Timestamp: ${{ env.BUILD_TIMESTAMP }}.
         env:
           SHOULD_DISPLAY_ACTOR_LABEL: true
