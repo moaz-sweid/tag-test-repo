@@ -13,6 +13,10 @@ on:
         default: "prod"
         description: Add release tag prefix
 
+  push:
+    tags:
+      - "*"
+
 env:
   DOCKER_REGISTRY: "prod-registry.safee.com"
   DOCKER_IMAGE_NAME: "wasl"
@@ -22,15 +26,19 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-    - uses: actions/checkout@v3
+    - name: Checkout code
+      uses: actions/checkout@v3
       with:
         repository: "UgaritTech/wasl-service"
         token: ${{ secrets.PAT_TOKEN }}
-        ref: ${{github.event.inputs.deploy-branch}}
+        fetch-depth: 0
+        ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.deploy-branch || github.ref }}
         path: wasl
 
-    - uses: actions/setup-java@v3
+    - name: Set up Java 11 (Corretto)
+      uses: actions/setup-java@v3
       with:
         distribution: 'corretto'
         java-version: '11'
@@ -40,21 +48,30 @@ jobs:
       with:
         maven-version: 3.6.3
 
-    - name: Install project artifacts (JMS)
-      run: mvn install:install-file -Dfile="wasl/Artifacts/jm-connector-6.10.jar" -DgroupId="tech.ugarit" -DartifactId="jm-connector" -Dversion="6.10" -Dpackaging="jar"
-
-    - name: Build Wasl Integration Model
-      run: mvn -f wasl/wasl-integration-model/pom.xml clean install
-
-    - name: Build Wasl Integration Management
-      run: mvn -f wasl/wasl-integration-management/pom.xml clean install -DskipTests
-
-    - name: Get latest releast tag and build timestamp
+    - name: Install JMS connector
       run: |
-        echo "LATEST_RELEASE_TAG=$(curl --silent -u sre-ugarit:${{ secrets.PAT_TOKEN }} https://api.github.com/repos/UgaritTech/wasl-service/tags | jq -r '.[0].name')" >> $GITHUB_ENV
+        mvn install:install-file \
+          -Dfile="wasl/Artifacts/jm-connector-6.10.jar" \
+          -DgroupId="tech.ugarit" -DartifactId="jm-connector" \
+          -Dversion="6.10" -Dpackaging="jar"
+
+    - name: Build integration modules
+      run: |
+        mvn -f wasl/wasl-integration-model/pom.xml clean install
+        mvn -f wasl/wasl-integration-management/pom.xml clean install -DskipTests
+
+    - name: Get latest tag
+      id: get-latest-tag
+      uses: WyriHaximus/github-action-get-previous-tag@v1
+      with:
+        workingDirectory: 'wasl'
+
+    - name: Export LATEST_TAG and BUILD_TIMESTAMP
+      run: |
+        echo "LATEST_TAG=${{ steps.get-latest-tag.outputs.tag }}" >> $GITHUB_ENV
         echo "BUILD_TIMESTAMP=$(date '+%Y%m%d%H%M%S')" >> $GITHUB_ENV
 
-    - name: Login to Safee Private Registry
+    - name: Login to Safee Registry
       uses: docker/login-action@v3
       with:
         registry: ${{ env.DOCKER_REGISTRY }}
@@ -70,49 +87,48 @@ jobs:
       with:
         context: wasl
         push: true
-        tags: ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.DOCKER_IMAGE_TAG_TEXT }},${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ github.event.inputs.release-tag-prefix }}-${{ env.LATEST_RELEASE_TAG }},${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.DOCKER_IMAGE_TAG_TEXT }}-${{ env.BUILD_TIMESTAMP }},${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ github.event.inputs.release-tag-prefix }}-${{ env.LATEST_RELEASE_TAG }}-${{ env.BUILD_TIMESTAMP }}
+        tags: |
+          ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.DOCKER_IMAGE_TAG_TEXT }}
+          ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ github.event.inputs.release-tag-prefix }}-${{ env.LATEST_TAG }}
+          ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.DOCKER_IMAGE_TAG_TEXT }}-${{ env.BUILD_TIMESTAMP }}
+          ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ github.event.inputs.release-tag-prefix }}-${{ env.LATEST_TAG }}-${{ env.BUILD_TIMESTAMP }}
         cache-from: type=registry,ref=${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:buildcache
         cache-to: type=registry,ref=${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:buildcache,mode=max
 
-    - name: Build Wasl Integration Model for hazelcast 
-      run: mvn -f wasl/wasl-integration-model/pom.xml clean compile jar:jar
-    - name: Build Wasl Integration Management for hazelcast 
-      run: mvn -f wasl/wasl-integration-management/pom.xml clean compile jar:jar
-    - name : copy to hazelcast 
-      run : cp wasl/wasl-integration-model/target/wasl-integration-model-1.5.18.jar wasl/wasl-integration-cache/ |
-            cp wasl/wasl-integration-management/target/wasl-integration-1.0.0.jar wasl/wasl-integration-cache/ 
-            
+    - name: Prepare Hazelcast jars
+      run: |
+        mvn -f wasl/wasl-integration-model/pom.xml clean compile jar:jar
+        mvn -f wasl/wasl-integration-management/pom.xml clean compile jar:jar
+        cp wasl/wasl-integration-model/target/wasl-integration-model-*.jar wasl/wasl-integration-cache/
+        cp wasl/wasl-integration-management/target/wasl-integration-*.jar wasl/wasl-integration-cache/
+
     - name: Build and push Wasl Cache Docker image
-      id: docker_build_HZ
+      id: docker_build_hz
       uses: docker/build-push-action@v5
       with:
         context: wasl/wasl-integration-cache
         push: true
-        tags: ${{ env.DOCKER_REGISTRY }}/wasl-integration-cache:${{ env.DOCKER_IMAGE_TAG_TEXT }},${{ env.DOCKER_REGISTRY }}/wasl-integration-cache:${{ github.event.inputs.release-tag-prefix }}-${{ env.LATEST_RELEASE_TAG }},${{ env.DOCKER_REGISTRY }}/wasl-integration-cache:${{ github.event.inputs.release-tag-prefix }}-${{ env.LATEST_RELEASE_TAG }}-${{ env.BUILD_TIMESTAMP }}
+        tags: |
+          ${{ env.DOCKER_REGISTRY }}/wasl-integration-cache:${{ env.DOCKER_IMAGE_TAG_TEXT }}
+          ${{ env.DOCKER_REGISTRY }}/wasl-integration-cache:${{ github.event.inputs.release-tag-prefix }}-${{ env.LATEST_TAG }}
+          ${{ env.DOCKER_REGISTRY }}/wasl-integration-cache:${{ github.event.inputs.release-tag-prefix }}-${{ env.LATEST_TAG }}-${{ env.BUILD_TIMESTAMP }}
         cache-from: type=registry,ref=${{ env.DOCKER_REGISTRY }}/wasl-integration-cache:buildcache
         cache-to: type=registry,ref=${{ env.DOCKER_REGISTRY }}/wasl-integration-cache:buildcache,mode=max
 
-    - uses: neonidian/teams-notify-build-status@v3
+    - name: Send Teams notification
+      uses: neonidian/teams-notify-build-status@v3
       with:
         webhookUrl: ${{ env.MSTEAMS_WEBHOOK }}
         title: ${{ env.DOCKER_IMAGE_NAME }} - Prod
         status: ${{ job.status }}
         message: |
-          ${{ env.DOCKER_REGISTRY }}/wasl-integration-cache:${{ github.event.inputs.release-tag-prefix }}-${{ env.LATEST_RELEASE_TAG }}-${{ env.BUILD_TIMESTAMP }}@${{ steps.docker_build_HZ.outputs.digest }}
-          
-          ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ github.event.inputs.release-tag-prefix }}-${{ env.LATEST_RELEASE_TAG }}-${{ env.BUILD_TIMESTAMP }}@${{ steps.docker_build.outputs.digest }}
+          Wasl Cache: ${{ env.DOCKER_REGISTRY }}/wasl-integration-cache:${{ github.event.inputs.release-tag-prefix }}-${{ env.LATEST_TAG }}-${{ env.BUILD_TIMESTAMP }}@${{ steps.docker_build_hz.outputs.digest }}
+          Wasl Service: ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ github.event.inputs.release-tag-prefix }}-${{ env.LATEST_TAG }}-${{ env.BUILD_TIMESTAMP }}@${{ steps.docker_build.outputs.digest }}
 
           ${{ env.DOCKER_IMAGE_NAME }} built successfully.
-          
-          Branch: ${{github.event.inputs.deploy-branch}}.
-
-          Docker image ID: ${{ steps.docker_build.outputs.imageid }}.
-
-          Docker image digest: ${{ steps.docker_build.outputs.digest }}.
-
-          Docker image tag prefix and latest release tag: ${{ github.event.inputs.release-tag-prefix }}${{ env.LATEST_RELEASE_TAG }}.
-
-          Timestamp: ${{ env.BUILD_TIMESTAMP }}.
+          Branch/Tag: ${{ github.ref_name }}
+          Latest Tag: ${{ env.LATEST_TAG }}
+          Timestamp: ${{ env.BUILD_TIMESTAMP }}
       env:
         SHOULD_DISPLAY_ACTOR_LABEL: true
         SHOULD_DISPLAY_VIEW_RUN_BUTTON: true
