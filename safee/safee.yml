@@ -1,0 +1,268 @@
+name: Build & Deploy New Release
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      safee-branch:
+        required: true
+        default: "master"
+        description: Choose Safee branch to build
+      safee-pipeline:
+        required: true
+        default: "master"
+        description: Choose Safee Pipeline branch to build
+      release-tag-prefix:
+        required: false
+        default: ""
+        description: Add release tag prefix
+      hz_single:
+        type: boolean
+        default: true
+        description: no HZ cluster (HZ-S)
+      hz_async:
+        type: boolean
+        default: false
+        description: Use HZ with Async (HZ-ASY)
+      hz_sync:
+        type: boolean
+        default: false
+        description: Use HZ with sync (HZ-SY)
+
+env:
+  DOCKER_REGISTRY: "prod-registry.safee.com"
+  DOCKER_IMAGE_APP: "safee-app"
+  DOCKER_IMAGE_COMMANDS: "safee-commands"
+  DOCKER_IMAGE_TIMERS: "safee-timers"
+  DOCKER_IMAGE_PIPELINE: "safee-pipeline"
+  DOCKER_IMAGE_CLIENT: "safee-client"
+  DOCKER_IMAGE_HZ_TAG: "HZ-S"
+  MSTEAMS_WEBHOOK: "https://nurdernek.webhook.office.com/webhookb2/34cbc660-6cf1-43fe-b032-6ed7abd0f581@758b3098-b6f6-42ba-8309-6fb195e54bd5/IncomingWebhook/2cb79ddcab184f83b7f3a6abceba501d/b970ad1a-f46c-44ef-bda4-24c42eba2347/V2uME8lonYsh4EsLxF4mehcUOeIfCoDIXOy3AZPszg36w1"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          repository: "UgaritTech/safee-tracking"
+          token: ${{ secrets.PAT_TOKEN }}
+          ref: ${{github.event.inputs.safee-branch}}
+          path: safee-tracking
+      - uses: actions/checkout@v3
+        with:
+          repository: "UgaritTech/Safee-Pipeline"
+          token: ${{ secrets.PAT_TOKEN }}
+          ref: ${{ github.event.inputs.safee-pipeline }}
+          path: safee-pipeline
+
+      - uses: actions/setup-java@v3
+        with:
+          distribution: "corretto"
+          java-version: "17"
+          cache: "maven"
+
+      - name: Set up Maven
+        uses: stCarolas/setup-maven@v4.5
+        with:
+          maven-version: 3.9.3
+
+      - name: Maven Version
+        run: mvn --version
+
+      - name: Get latest releast tag
+        run: |
+          echo "LATEST_RELEASE_TAG=$(curl --silent -u sre-ugarit:${{ secrets.PAT_TOKEN }} https://api.github.com/repos/UgaritTech/safee-tracking/tags | jq -r '.[0].name')" >> $GITHUB_ENV
+
+      - name: Get build timestamp
+        run: echo "BUILD_TIMESTAMP=$(date '+%Y%m%d%H%M%S')" >> $GITHUB_ENV
+
+      - name: Update release tag for safee-ejb
+        run: |
+          sed -i "s/m.m.p/${{ env.LATEST_RELEASE_TAG }}/g" "safee-tracking/SafeeTracking/SafeeTracking-web/src/main/java/com/safee/tracking/web/constants/Constants.java"
+
+      - name: Update resources tag and folder
+        run: |
+          mv "safee-tracking/SafeeTracking/SafeeTracking-web/src/main/webapp/resources/css/1.1.1/" "safee-tracking/SafeeTracking/SafeeTracking-web/src/main/webapp/resources/css/${{ env.BUILD_TIMESTAMP }}/"
+          mv "safee-tracking/SafeeTracking/SafeeTracking-web/src/main/webapp/resources/js/1.1.1/" "safee-tracking/SafeeTracking/SafeeTracking-web/src/main/webapp/resources/js/${{ env.BUILD_TIMESTAMP }}/"
+          sed -i "s/1.1.1/${{ env.BUILD_TIMESTAMP }}/g" "safee-tracking/SafeeTracking/SafeeTracking-web/src/main/java/com/safee/tracking/web/constants/Constants.java"
+
+      - name: Update Hazelcast client - single
+        if: ${{ inputs.hz_single }}
+        run: sed -i 's/127.0.0.1:5701/prod-safee-cache:5701/g' "safee-tracking/SafeeTracking-jpa/src/main/resources/META-INF/persistence.xml"
+
+      - name: Update Hazelcast client
+        run: sed -i 's/127.0.0.1:5701/prod-safee-cache-01:5701,prod-safee-cache-02:5701/g' "safee-tracking/SafeeTracking-jpa/src/main/resources/META-INF/persistence.xml"
+
+      - name: Update Hazelcast cluster name
+        run: sed -i 's/dev/prod/g' "safee-tracking/SafeeTracking-jpa/src/main/resources/META-INF/persistence.xml"
+
+      - name: Install project artifacts
+        run: |
+          mvn install:install-file -Dfile="safee-tracking/Artifacts/muraqib-connector-1.0.jar" -Dclassifier=jakarta -DgroupId="com.safee" -DartifactId="muraqib-connector" -Dversion="1.0" -Dpackaging="jar"
+          mvn install:install-file -Dfile="safee-tracking/Artifacts/jm-connector-6.6-jakarta.jar" -Dclassifier=jakarta -DgroupId="tech.ugarit.jm" -DartifactId="jm-connector" -Dversion="6.6" -Dpackaging="jar"
+          mvn install:install-file -Dfile="safee-tracking/Artifacts/wasl-integration-model-1.5.18-jakarta.jar" -Dclassifier=jakarta -DgroupId="com.safee" -DartifactId="wasl-integration-model" -Dversion="1.5.18" -Dpackaging="jar"
+          mvn install:install-file -Dfile="safee-tracking/Artifacts/primefaces-12.0.3-jakarta.jar" -Dclassifier=jakarta -DgroupId="org.primefaces"  -DartifactId="primefaces" -Dversion="12.0.3" -Dpackaging="jar" -DpomFile="safee-tracking/Artifacts/primefaces-12.0.3.pom"
+          mvn install:install-file -Dfile="safee-tracking/Artifacts/morpheus-theme-5.0.0-jakarta.jar" -Dclassifier=jakarta -DgroupId="org.primefaces.morpheus"  -DartifactId="morpheus-theme" -Dversion="5.0.0" -Dpackaging="jar"
+          mvn install:install-file -Dfile="safee-tracking/Artifacts/safee-logging-1.0.jar" -DgroupId="safee"  -DartifactId="safee-logging" -Dversion="1.0" -Dpackaging="jar"
+
+      - name: Set HZ-ASYNC
+        if: ${{ inputs.hz_async }}
+        run: |       
+          rm safee-tracking/SafeeTrackingClient/src/main/java/com/safee/tracking/hazelcast/HazelcastConstants.java
+          cp safee-tracking/SafeeTrackingClient/src/main/resources/hazelcast-constants-template/AsyncHazelcastConstants.java.template safee-tracking/SafeeTrackingClient/src/main/java/com/safee/tracking/hazelcast/HazelcastConstants.java
+          echo "DOCKER_IMAGE_HZ_TAG=HZ-ASY" >> $GITHUB_ENV
+          echo $DOCKER_IMAGE_HZ_TAG
+
+      - name: Set HZ-SYNC
+        if: ${{ inputs.hz_sync }}
+        run: |       
+          rm safee-tracking/SafeeTrackingClient/src/main/java/com/safee/tracking/hazelcast/HazelcastConstants.java
+          cp safee-tracking/SafeeTrackingClient/src/main/resources/hazelcast-constants-template/SyncHazelcastConstants.java.template safee-tracking/SafeeTrackingClient/src/main/java/com/safee/tracking/hazelcast/HazelcastConstants.java
+          echo "DOCKER_IMAGE_HZ_TAG=HZ-SY" >> $GITHUB_ENV
+          echo $DOCKER_IMAGE_HZ_TAG
+
+      - name: Set HZ-Single
+        if: ${{ inputs.hz_single }}
+        run: |       
+          rm safee-tracking/SafeeTrackingClient/src/main/java/com/safee/tracking/hazelcast/HazelcastConstants.java
+          cp safee-tracking/SafeeTrackingClient/src/main/resources/hazelcast-constants-template/SingleHazelcastConstants.java.template safee-tracking/SafeeTrackingClient/src/main/java/com/safee/tracking/hazelcast/HazelcastConstants.java
+          echo "DOCKER_IMAGE_HZ_TAG=HZ-S" >> $GITHUB_ENV
+          echo $DOCKER_IMAGE_HZ_TAG
+
+
+      - name: Build SafeeTrackingClient
+        run: mvn -f safee-tracking/SafeeTrackingClient/pom.xml install
+
+      - name: Build SafeeTracking-jpa
+        run: mvn -f safee-tracking/SafeeTracking-jpa/pom.xml install
+
+      - name: Build SafeeTracking-services
+        run: mvn -f safee-tracking/SafeeTracking/SafeeTracking-services/pom.xml install
+
+      - name: Build SafeeTracking-commands
+        run: mvn -f safee-tracking/SafeeTracking/SafeeTracking-commands/pom.xml install
+
+      - name: Build SafeeTracking-timers
+        run: mvn -f safee-tracking/SafeeTracking/SafeeTracking-timers/pom.xml install
+
+      - name: Build SafeeTracking-ejb
+        run: mvn -f safee-tracking/SafeeTracking/SafeeTracking-ejb/pom.xml install
+
+      - name: Build SafeeTracking-api
+        run: mvn -f safee-tracking/SafeeTracking/SafeeTracking-api/pom.xml install
+
+      - name: Build SafeeTracking-web
+        run: mvn -f safee-tracking/SafeeTracking/SafeeTracking-web/pom.xml install
+
+      - name: Build Safee Pipeline
+        run: mvn -f safee-pipeline/pom.xml install
+
+      - name: Prepare war files
+        run: |
+          mkdir safee-tracking/artifacts && mkdir safee-tracking/artifacts/app && mkdir safee-tracking/artifacts/pipeline && mkdir safee-tracking/artifacts/client && mkdir safee-tracking/artifacts/timers && mkdir safee-tracking/artifacts/commands
+          cp safee-tracking/SafeeTracking/SafeeTracking-ejb/target/SafeeTracking-ejb-2.1.war safee-tracking/artifacts/app/1-ejb.war
+          cp safee-tracking/SafeeTracking/SafeeTracking-web/target/SafeeTracking-web-2.1.war safee-tracking/artifacts/app/2-web.war
+          cp safee-tracking/SafeeTracking/SafeeTracking-api/target/SafeeTracking-api-2.1.war safee-tracking/artifacts/app/3-api.war
+          cp safee-tracking/SafeeTracking/SafeeTracking-timers/target/SafeeTracking-timers-2.1.war safee-tracking/artifacts/timers/timers.war
+          cp safee-tracking/SafeeTracking/SafeeTracking-commands/target/SafeeTracking-commands-2.1.war safee-tracking/artifacts/commands/commands.war
+          cp safee-tracking/SafeeTrackingClient/target/SafeeTrackingClient-2.1.jar safee-tracking/artifacts/client/client.jar
+          cp safee-pipeline/target/SafeeTracking-pipeline-2.1.war safee-tracking/artifacts/pipeline/pipeline.war
+
+      - name: Login to Safee Private Registry Prod
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.DOCKER_REGISTRY }}
+          username: sre
+          password: ${{ secrets.REGISTRY_PASS }}
+
+      - name: Login to Safee Private Registry DEV
+        uses: docker/login-action@v3
+        with:
+          registry: dev-registry.safee.com
+          username: sre
+          password: ${{ secrets.REGISTRY_PASS }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Safee App Docker image
+        id: safee_app_build
+        uses: docker/build-push-action@v5
+        with:
+          context: safee-tracking
+          target: app
+          push: true
+          tags: ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_APP }}:${{ env.DOCKER_IMAGE_HZ_TAG}}-${{ github.event.inputs.release-tag-prefix }}${{ env.LATEST_RELEASE_TAG }}
+          cache-from: type=registry,ref=${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_APP }}:buildcache-${{ env.DOCKER_IMAGE_HZ_TAG}}-${{ github.event.inputs.release-tag-prefix }}${{ env.LATEST_RELEASE_TAG }}
+          cache-to: type=registry,ref=${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_APP }}:buildcache-${{ env.DOCKER_IMAGE_HZ_TAG}}-${{ github.event.inputs.release-tag-prefix }}${{ env.LATEST_RELEASE_TAG }},mode=max
+
+      - name: Build and push Safee Commands Docker image
+        id: safee_commands_build
+        uses: docker/build-push-action@v5
+        with:
+          context: safee-tracking
+          target: commands
+          push: true
+          tags: ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_COMMANDS }}:${{ env.DOCKER_IMAGE_HZ_TAG}}-${{ github.event.inputs.release-tag-prefix }}${{ env.LATEST_RELEASE_TAG }}
+          cache-from: type=registry,ref=${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_COMMANDS }}:buildcache-${{ env.DOCKER_IMAGE_HZ_TAG}}-${{ github.event.inputs.release-tag-prefix }}${{ env.LATEST_RELEASE_TAG }}
+          cache-to: type=registry,ref=${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_COMMANDS }}:buildcache-${{ env.DOCKER_IMAGE_HZ_TAG}}-${{ github.event.inputs.release-tag-prefix }}${{ env.LATEST_RELEASE_TAG }},mode=max
+
+      - name: Build and push Safee Timers Docker image
+        id: safee_timers_build
+        uses: docker/build-push-action@v5
+        with:
+          context: safee-tracking
+          target: timers
+          push: true
+          tags: ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_TIMERS }}:${{ env.DOCKER_IMAGE_HZ_TAG}}-${{ github.event.inputs.release-tag-prefix }}${{ env.LATEST_RELEASE_TAG }}
+          cache-from: type=registry,ref=${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_TIMERS }}:buildcache-${{ env.DOCKER_IMAGE_HZ_TAG}}-${{ github.event.inputs.release-tag-prefix }}${{ env.LATEST_RELEASE_TAG }}
+          cache-to: type=registry,ref=${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_TIMERS }}:buildcache-${{ env.DOCKER_IMAGE_HZ_TAG}}-${{ github.event.inputs.release-tag-prefix }}${{ env.LATEST_RELEASE_TAG }},mode=max
+
+      - name: Build and push Safee Pipeline Docker image
+        id: safee_pipeline_build
+        uses: docker/build-push-action@v5
+        with:
+          context: safee-tracking
+          target: pipeline
+          push: true
+          tags: ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_PIPELINE }}:${{ env.DOCKER_IMAGE_HZ_TAG}}-${{ github.event.inputs.release-tag-prefix }}${{ env.LATEST_RELEASE_TAG }}
+          cache-from: type=registry,ref=${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_PIPELINE }}:buildcache-${{ env.DOCKER_IMAGE_HZ_TAG}}-${{ github.event.inputs.release-tag-prefix }}${{ env.LATEST_RELEASE_TAG }}
+          cache-to: type=registry,ref=${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_PIPELINE }}:buildcache-${{ env.DOCKER_IMAGE_HZ_TAG}}-${{ github.event.inputs.release-tag-prefix }}${{ env.LATEST_RELEASE_TAG }},mode=max
+
+      - name: Build and push Safee Cache Docker image
+        id: safee_cache_build
+        uses: docker/build-push-action@v5
+        with:
+          context: safee-tracking
+          target: client
+          push: true
+          tags: ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_CLIENT }}:${{ env.DOCKER_IMAGE_HZ_TAG}}-${{ github.event.inputs.release-tag-prefix }}${{ env.LATEST_RELEASE_TAG }}
+          cache-from: type=registry,ref=${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_CLIENT }}:buildcache-${{ env.DOCKER_IMAGE_HZ_TAG}}-${{ github.event.inputs.release-tag-prefix }}${{ env.LATEST_RELEASE_TAG }}
+          cache-to: type=registry,ref=${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_CLIENT }}:buildcache-${{ env.DOCKER_IMAGE_HZ_TAG}}-${{ github.event.inputs.release-tag-prefix }}${{ env.LATEST_RELEASE_TAG }},mode=max
+
+      - uses: neonidian/teams-notify-build-status@v3
+        with:
+          webhookUrl: ${{ env.MSTEAMS_WEBHOOK }}
+          title: Safee-Prod
+          status: ${{ job.status }}
+          message: |
+            ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_APP }}:${{ env.DOCKER_IMAGE_HZ_TAG}}-${{ github.event.inputs.release-tag-prefix }}${{ env.LATEST_RELEASE_TAG }}@${{ steps.safee_app_build.outputs.digest }}
+
+            ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_COMMANDS }}:${{ env.DOCKER_IMAGE_HZ_TAG}}-${{ github.event.inputs.release-tag-prefix }}${{ env.LATEST_RELEASE_TAG }}@${{ steps.safee_commands_build.outputs.digest }}
+
+            ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_TIMERS }}:${{ env.DOCKER_IMAGE_HZ_TAG}}-${{ github.event.inputs.release-tag-prefix }}${{ env.LATEST_RELEASE_TAG }}@${{ steps.safee_timers_build.outputs.digest }}
+
+            ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_PIPELINE }}:${{ env.DOCKER_IMAGE_HZ_TAG}}-${{ github.event.inputs.release-tag-prefix }}${{ env.LATEST_RELEASE_TAG }}@${{ steps.safee_pipeline_build.outputs.digest }}
+
+            ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_CLIENT }}:${{ env.DOCKER_IMAGE_HZ_TAG}}-${{ github.event.inputs.release-tag-prefix }}${{ env.LATEST_RELEASE_TAG }}@${{ steps.safee_cache_build.outputs.digest }}
+
+            Images built successfully.
+            
+            Safee Branch: ${{github.event.inputs.safee-branch}}.
+
+            Pipeline Branch: ${{ github.event.inputs.safee-pipeline }}.
+        env:
+          SHOULD_DISPLAY_ACTOR_LABEL: true
+          SHOULD_DISPLAY_VIEW_RUN_BUTTON: true
+          SHOULD_DISPLAY_VIEW_COMMIT_BUTTON: true
