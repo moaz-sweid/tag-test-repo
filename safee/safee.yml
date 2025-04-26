@@ -1,4 +1,5 @@
 name: Build & Deploy New Release
+
 on:
   release:
     types: [published]
@@ -42,21 +43,28 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout safee-tracking
+        uses: actions/checkout@v3
         with:
           repository: "UgaritTech/safee-tracking"
           token: ${{ secrets.PAT_TOKEN }}
-          ref: ${{github.event.inputs.safee-branch}}
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.safee-branch }}
           path: safee-tracking
-      - uses: actions/checkout@v3
+
+      - name: Checkout safee-pipeline
+        uses: actions/checkout@v3
         with:
           repository: "UgaritTech/Safee-Pipeline"
           token: ${{ secrets.PAT_TOKEN }}
+          fetch-depth: 0
           ref: ${{ github.event.inputs.safee-pipeline }}
           path: safee-pipeline
 
-      - uses: actions/setup-java@v3
+      - name: Setup Java 17 (Corretto)
+        uses: actions/setup-java@v3
         with:
           distribution: "corretto"
           java-version: "17"
@@ -65,17 +73,21 @@ jobs:
       - name: Set up Maven
         uses: stCarolas/setup-maven@v4.5
         with:
-          maven-version: 3.9.3
+          maven-version: "3.9.3"
 
-      - name: Maven Version
+      - name: Maven --version
         run: mvn --version
 
-      - name: Get latest releast tag
-        run: |
-          echo "LATEST_RELEASE_TAG=$(curl --silent -u sre-ugarit:${{ secrets.PAT_TOKEN }} https://api.github.com/repos/UgaritTech/safee-tracking/tags | jq -r '.[0].name')" >> $GITHUB_ENV
+      - name: Get latest tag
+        id: get-latest-tag
+        uses: WyriHaximus/github-action-get-previous-tag@v1
+        with:
+          workingDirectory: 'safee-tracking'
 
-      - name: Get build timestamp
-        run: echo "BUILD_TIMESTAMP=$(date '+%Y%m%d%H%M%S')" >> $GITHUB_ENV
+      - name: Export LATEST_TAG and BUILD_TIMESTAMP
+        run: |
+          echo "LATEST_RELEASE_TAG=${{ steps.get-latest-tag.outputs.tag }}" >> $GITHUB_ENV
+          echo "BUILD_TIMESTAMP=$(date '+%Y%m%d%H%M%S')"     >> $GITHUB_ENV
 
       - name: Update release tag for safee-ejb
         run: |
@@ -241,7 +253,8 @@ jobs:
           cache-from: type=registry,ref=${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_CLIENT }}:buildcache-${{ env.DOCKER_IMAGE_HZ_TAG}}-${{ github.event.inputs.release-tag-prefix }}${{ env.LATEST_RELEASE_TAG }}
           cache-to: type=registry,ref=${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_CLIENT }}:buildcache-${{ env.DOCKER_IMAGE_HZ_TAG}}-${{ github.event.inputs.release-tag-prefix }}${{ env.LATEST_RELEASE_TAG }},mode=max
 
-      - uses: neonidian/teams-notify-build-status@v3
+      - name: Teams notification
+        uses: neonidian/teams-notify-build-status@v3
         with:
           webhookUrl: ${{ env.MSTEAMS_WEBHOOK }}
           title: Safee-Prod
